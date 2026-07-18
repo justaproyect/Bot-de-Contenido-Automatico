@@ -172,10 +172,8 @@ def add_music(video_path: str, music_path: str, output: str) -> bool:
         "-i", video_path,
         "-i", music_path,
         "-filter_complex",
-        f"[1:a]volume=0.25,aloop=loop=-1:size=2e+09,atrim=0:{dur},afade=t=in:st=0:d=1,afade=t=out:st={dur-1}:d=1[bg];"
-        f"[0:a]volume=1.8[orig];"
-        f"[orig][bg]amix=inputs=2:duration=first:dropout_transition=2[a]",
-        "-map", "0:v", "-map", "[a]",
+        f"[1:a]volume=0.25,aloop=loop=-1:size=2e+09,atrim=0:{dur},afade=t=in:st=0:d=1,afade=t=out:st={max(dur-1,0)}:d=1[bg]",
+        "-map", "0:v", "-map", "[bg]",
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "128k",
         "-shortest",
