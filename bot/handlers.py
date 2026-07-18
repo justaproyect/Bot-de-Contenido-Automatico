@@ -75,7 +75,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         analysis = await asyncio.wait_for(
             asyncio.to_thread(analyze_video, video_path),
-            timeout=45
+            timeout=30
         )
 
         productos = analysis.get("productos_detectados", [])
@@ -107,7 +107,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 analysis,
                 output_path,
             ),
-            timeout=90
+            timeout=60
         )
 
         hashtags = analysis.get("hashtags", ["pokemon", "viral", "fyp"])

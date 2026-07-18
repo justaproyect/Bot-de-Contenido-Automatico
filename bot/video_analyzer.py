@@ -40,12 +40,12 @@ def extract_frames(video_path: str, num_frames: int = 4) -> list[str]:
         cmd = [
             "ffmpeg", "-y", "-ss", str(timestamp),
             "-i", video_path,
-            "-frames:v", "1", "-q:v", "3",
-            "-vf", "scale=640:-1",
+            "-frames:v", "1", "-q:v", "5",
+            "-vf", "scale=320:-1",
             frame_path,
         ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=15, check=True)
+            subprocess.run(cmd, capture_output=True, timeout=10, check=True)
             if os.path.exists(frame_path):
                 frame_paths.append(frame_path)
         except Exception:
@@ -57,44 +57,38 @@ def extract_frames(video_path: str, num_frames: int = 4) -> list[str]:
 def analyze_video(video_path: str) -> dict:
     duration = get_video_duration(video_path)
 
+    if duration < 10:
+        return default_analysis(duration)
+
     if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
         return default_analysis(duration)
 
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.0-flash")
 
-    frame_paths = extract_frames(video_path, num_frames=4)
+    frame_paths = extract_frames(video_path, num_frames=2)
 
     if not frame_paths:
         return default_analysis(duration)
 
     try:
         import PIL.Image
-        images = [PIL.Image.open(fp) for fp in frame_paths[:4] if os.path.exists(fp)]
+        images = [PIL.Image.open(fp) for fp in frame_paths[:2] if os.path.exists(fp)]
 
-        prompt = f"""Eres editor de contenido Pokemon para Instagram Reels. Video dura {duration:.1f}s.
-
-Analiza estas frames. Responde SOLO JSON:
+        prompt = f"""Video Pokemon {duration:.0f}s. JSON solo:
 {{
-    "productos_detectados": ["productos Pokemon que ves"],
-    "texto_principal": "TEXTO GANCHO max 5 palabras",
-    "texto_secundario": "TEXTO SECUNDARIO max 4 palabras",
-    "estilo_texto": "impactante/emocional/curioso/divertido/urgente",
-    "posicion_texto": "centro/arriba/abajo",
-    "hashtags": ["10 hashtags Pokemon viral"],
-    "caption": "Caption Instagram con emojis 1-2 lineas",
-    "call_to_action": "Accion para viewer",
-    "mejor_momento_inicio": 0.0,
-    "mejor_momento_fin": 6.0,
-    "momentos_clave": [{{"inicio": 0.0, "fin": 3.0, "razon": "razon"}}],
-    "emocion_objetivo": "emocion del viewer",
-    "mood": "energetic/calm/funny/dramatic"
+"productos":["lista"],
+"texto":"MAX5 PALABRAS",
+"estilo":"impactante/emocional/divertido/urgente",
+"hashtags":["10 tags"],
+"caption":"1 linea con emojis",
+"mood":"energetic/calm/dramatic"
 }}"""
 
         response = model.generate_content(
             [prompt] + images,
             generation_config=genai.GenerationConfig(
-                max_output_tokens=1000,
+                max_output_tokens=300,
                 temperature=0.7,
             )
         )
@@ -107,26 +101,17 @@ Analiza estas frames. Responde SOLO JSON:
 
         result = json.loads(text.strip())
 
-        result["clips"] = []
-        if "mejor_momento_inicio" in result and "mejor_momento_fin" in result:
-            result["clips"].append({
-                "start": result["mejor_momento_inicio"],
-                "end": result["mejor_momento_fin"],
-                "energy": 1.0,
-            })
-
-        if "momentos_clave" in result:
-            for m in result["momentos_clave"]:
-                if "inicio" in m and "fin" in m:
-                    result["clips"].append({
-                        "start": m["inicio"],
-                        "end": m["fin"],
-                        "energy": 0.9,
-                    })
-
-        result["clips"] = result["clips"][:4]
+        result["clips"] = [{"start": 0, "end": min(6, duration), "energy": 1.0}]
         result["duration"] = duration
         result["frames_analyzed"] = len(images)
+
+        if "productos" in result:
+            result["productos_detectados"] = result.pop("productos")
+        if "texto" in result:
+            result["texto_principal"] = result.pop("texto")
+            result["texto_secundario"] = ""
+        if "estilo" in result:
+            result["estilo_texto"] = result.pop("estilo")
 
         if "texto_principal" not in result:
             result["texto_principal"] = "POV"
@@ -134,6 +119,10 @@ Analiza estas frames. Responde SOLO JSON:
             result["estilo_texto"] = "impactante"
         if "posicion_texto" not in result:
             result["posicion_texto"] = "centro"
+        if "call_to_action" not in result:
+            result["call_to_action"] = "Visita nuestra tienda!"
+        if "hashtag" in result:
+            result["hashtags"] = result.pop("hashtag")
 
         return result
 
