@@ -251,3 +251,28 @@ def edit_video(
         raise
 
     return result
+
+
+def compress_for_telegram(video_path: str, output_path: str, max_size_mb: int = 45) -> str:
+    if not os.path.exists(video_path):
+        return video_path
+
+    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    if file_size_mb <= max_size_mb:
+        return video_path
+
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-c:v", "libx264", "-preset", "ultrafast",
+        "-crf", "32",
+        "-vf", "scale=480:854:force_original_aspect_ratio=decrease,pad=480:854:(ow-iw)/2:(oh-ih)/2",
+        "-c:a", "aac", "-b:a", "48k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    if run_ffmpeg(cmd, timeout=120) and os.path.exists(output_path):
+        new_size = os.path.getsize(output_path) / (1024 * 1024)
+        logger.info(f"Compressed: {file_size_mb:.1f}MB -> {new_size:.1f}MB")
+        return output_path
+
+    return video_path

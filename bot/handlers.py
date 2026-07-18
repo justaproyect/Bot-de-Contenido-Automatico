@@ -13,7 +13,7 @@ from telegram.ext import (
 
 from bot.config import TELEGRAM_BOT_TOKEN, OUTPUT_DIR, TEMP_DIR, ALLOWED_USERS
 from bot.video_analyzer import analyze_audio_energy, analyze_video_content
-from bot.video_editor import edit_video
+from bot.video_editor import edit_video, compress_for_telegram
 from bot.storage import upload_video, delete_video, cleanup_local_files
 
 WAITING_VIDEO, WAITING_APPROVAL = range(2)
@@ -129,7 +129,11 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await status_msg.edit_text("Video listo! Enviando...")
 
-        with open(edit_result["final"], "rb") as video_file:
+        send_path = edit_result["final"]
+        compressed_path = os.path.join(TEMP_DIR, f"{user_id}_compressed.mp4")
+        send_path = compress_for_telegram(edit_result["final"], compressed_path)
+
+        with open(send_path, "rb") as video_file:
             await context.bot.send_video(
                 chat_id=update.effective_chat.id,
                 video=video_file,
@@ -146,7 +150,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
         )
 
-        cleanup_local_files(edit_result["final"])
+        cleanup_local_files(edit_result["final"], compressed_path)
         return WAITING_APPROVAL
 
     except Exception as e:
