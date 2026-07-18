@@ -89,7 +89,7 @@ Analiza estas frames. Responde SOLO JSON:
     "momentos_clave": [{{"inicio": 0.0, "fin": 3.0, "razon": "razon"}}],
     "emocion_objetivo": "emocion del viewer",
     "mood": "energetic/calm/funny/dramatic"
-}}
+}}"""
 
         response = model.generate_content(
             [prompt] + images,
