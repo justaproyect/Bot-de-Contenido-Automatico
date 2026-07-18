@@ -3,11 +3,7 @@ import subprocess
 import tempfile
 import logging
 
-from bot.config import (
-    CLIP_MAX_DURATION,
-    CLIP_MIN_DURATION,
-    MUSIC_DIR,
-)
+from bot.config import MUSIC_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +18,7 @@ def get_music_path() -> str:
 
 def run_ffmpeg(cmd: list[str], timeout: int = 60) -> bool:
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr[:200]}")
             return False
@@ -36,7 +30,7 @@ def run_ffmpeg(cmd: list[str], timeout: int = 60) -> bool:
 
 def edit_video(
     video_path: str,
-    segments: list[dict],
+    clips: list[dict],
     text_overlay: str = "POV",
     output_path: str | None = None,
 ) -> dict:
@@ -44,21 +38,20 @@ def edit_video(
 
     result = {
         "original": video_path,
-        "clips": [],
         "final": None,
         "text": text_overlay,
-        "segments_used": len(segments),
     }
 
     try:
-        if not segments:
-            return result
+        if not clips:
+            clips = [{"start": 0, "end": 8, "energy": 1.0}]
 
-        seg = segments[0]
-        start = seg["start"]
-        duration = min(seg["end"] - seg["start"], CLIP_MAX_DURATION)
-        if duration < CLIP_MIN_DURATION:
-            duration = min(CLIP_MAX_DURATION, 6)
+        clip = clips[0]
+        start = clip.get("start", 0)
+        end = clip.get("end", 8)
+        duration = min(end - start, 15)
+        if duration < 2:
+            duration = min(8, end - start)
 
         if not output_path:
             base = os.path.splitext(os.path.basename(video_path))[0]
@@ -107,7 +100,7 @@ def edit_video(
                 "-filter_complex",
                 f"[0:v]{vf}[v];"
                 f"[0:a]volume=1.0[orig];"
-                f"[1:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];"
+                f"[1:a]volume=0.12,aloop=loop=-1:size=2e+09[bg];"
                 f"[orig][bg]amix=inputs=2:duration=first[a]",
                 "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",

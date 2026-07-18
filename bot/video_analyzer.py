@@ -7,23 +7,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
-    import numpy as np
-    NUMPY_AVAILABLE = True
-except ImportError:
-    NUMPY_AVAILABLE = False
-
-try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
 
-from bot.config import (
-    GEMINI_API_KEY,
-    ENERGY_THRESHOLD_PERCENTILE,
-    CLIP_MIN_DURATION,
-    CLIP_MAX_DURATION,
-)
+from bot.config import GEMINI_API_KEY
 
 
 def get_video_duration(video_path: str) -> float:
@@ -40,127 +29,135 @@ def get_video_duration(video_path: str) -> float:
         return 30.0
 
 
-def extract_audio(video_path: str) -> str:
-    audio_path = tempfile.mktemp(suffix=".wav", dir=os.path.dirname(video_path))
-    cmd = [
-        "ffmpeg", "-y", "-i", video_path,
-        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        "-t", "30",
-        audio_path,
-    ]
-    try:
-        subprocess.run(cmd, capture_output=True, timeout=30, check=True)
-        return audio_path
-    except Exception as e:
-        logger.error(f"Error extracting audio: {e}")
-        return ""
-
-
-def analyze_audio_energy(video_path: str) -> list[dict]:
+def extract_frames(video_path: str, num_frames: int = 8) -> list[str]:
     duration = get_video_duration(video_path)
-    audio_path = extract_audio(video_path)
+    frames_dir = tempfile.mkdtemp()
+    frame_paths = []
 
-    if not audio_path or not os.path.exists(audio_path):
-        return [{"start": 0, "end": min(duration, CLIP_MAX_DURATION), "energy": 0.5}]
-
-    try:
+    for i in range(num_frames):
+        timestamp = (duration / (num_frames + 1)) * (i + 1)
+        frame_path = os.path.join(frames_dir, f"frame_{i}.jpg")
+        cmd = [
+            "ffmpeg", "-y", "-ss", str(timestamp),
+            "-i", video_path,
+            "-frames:v", "1", "-q:v", "3",
+            "-vf", "scale=640:-1",
+            frame_path,
+        ]
         try:
-            import librosa
-            y, sr = librosa.load(audio_path, sr=16000, duration=30)
-            hop_length = 2048
-            rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
-            times = librosa.frames_to_time(
-                np.arange(len(rms)), sr=sr, hop_length=hop_length
-            )
-            threshold = np.percentile(rms, ENERGY_THRESHOLD_PERCENTILE)
+            subprocess.run(cmd, capture_output=True, timeout=15, check=True)
+            if os.path.exists(frame_path):
+                frame_paths.append(frame_path)
+        except Exception:
+            continue
 
-            best_start = 0
-            best_energy = 0
-            window_size = int(CLIP_MAX_DURATION * sr / hop_length)
-
-            for i in range(0, len(rms) - window_size, window_size // 2):
-                window_energy = float(np.mean(rms[i:i + window_size]))
-                if window_energy > best_energy:
-                    best_energy = window_energy
-                    best_start = float(times[i])
-
-            if best_energy > 0:
-                return [{"start": best_start, "end": min(best_start + CLIP_MAX_DURATION, duration), "energy": best_energy}]
-            else:
-                return [{"start": 0, "end": min(duration, CLIP_MAX_DURATION), "energy": 0.5}]
-        except ImportError:
-            return [{"start": 0, "end": min(duration, CLIP_MAX_DURATION), "energy": 0.5}]
-    finally:
-        if os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except Exception:
-                pass
+    return frame_paths
 
 
-def analyze_video_content(video_path: str) -> dict:
+def analyze_video(video_path: str) -> dict:
+    duration = get_video_duration(video_path)
+
     if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
-        return {
-            "description": "Video para contenido",
-            "hashtags": ["viral", "trending", "fyp", "content", "reels"],
-            "suggested_text": "POV",
-            "mood": "energetic",
-        }
+        return default_analysis(duration)
 
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.0-flash")
 
-    duration = get_video_duration(video_path)
-    frames_dir = tempfile.mkdtemp()
-    frame_path = os.path.join(frames_dir, "frame.jpg")
+    frame_paths = extract_frames(video_path, num_frames=8)
+
+    if not frame_paths:
+        return default_analysis(duration)
 
     try:
-        timestamp = duration / 2
-        cmd = [
-            "ffmpeg", "-y", "-ss", str(timestamp),
-            "-i", video_path,
-            "-frames:v", "1", "-q:v", "5",
-            "-vf", "scale=480:-1",
-            frame_path,
-        ]
-        subprocess.run(cmd, capture_output=True, timeout=15, check=True)
-
-        if not os.path.exists(frame_path):
-            return {
-                "description": "Video para contenido",
-                "hashtags": ["viral", "trending", "fyp", "content", "reels"],
-                "suggested_text": "POV",
-                "mood": "energetic",
-            }
-
         import PIL.Image
-        image = PIL.Image.open(frame_path)
+        images = [PIL.Image.open(fp) for fp in frame_paths if os.path.exists(fp)]
 
-        prompt = """Describe this video in 1 line. Give me JSON:
-{"description":"short description","mood":"energetic/calm/funny","suggested_text":"POV text","hashtags":["10 hashtags"]}"""
+        prompt = f"""Eres un editor profesional de contenido para Instagram Reels/TikTok. 
+El video dura {duration:.1f} segundos.
 
-        response = model.generate_content([prompt, image])
+Tu cliente vende ARTICULOS POKEMON (figuras, peluches, cartas, etc).
+Tu tarea es analizar este video y crear el MEJOR contenido posible.
+
+Analiza cada frame cuidadosamente. Identifica:
+1. Que productos Pokemon aparecen
+2. Que momentos son mas impactantes o llamativos
+3. Que texto gancho funcionaria mejor
+4. El mood general del video
+
+Responde SOLO con este JSON (sin nada mas):
+{{
+    "productos_detectados": ["lista de productos Pokemon que ves"],
+    "momentos_clave": [
+        {{"inicio": 0.0, "fin": 5.0, "razon": "por que este momento es bueno"}}
+    ],
+    "texto_overlay": "TEXTO GANCHO que aparece en el video (maximo 6 palabras, estilo POV o gancho)",
+    "hashtags": ["15 hashtags relevantes para Pokemon, merchandise, unboxing, reels, viral"],
+    "descripcion_para_caption": "Caption llamativo para Instagram (1-2 lineas, con emojis)",
+    "mood": "energetic/calm/funny/dramatic",
+    "mejor_momento_inicio": 0.0,
+    "mejor_momento_fin": 8.0,
+    "consejo_edicion": "consejo especifico para editar este video"
+}}"""
+
+        response = model.generate_content([prompt] + images)
         text = response.text
+
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
+
+        result = json.loads(text.strip())
+
+        result["clips"] = [{
+            "start": result.get("mejor_momento_inicio", 0),
+            "end": result.get("mejor_momento_fin", min(8, duration)),
+            "energy": 1.0,
+        }]
+
+        if "momentos_clave" in result and result["momentos_clave"]:
+            for momento in result["momentos_clave"]:
+                if "inicio" in momento and "fin" in momento:
+                    result["clips"].append({
+                        "start": momento["inicio"],
+                        "end": momento["fin"],
+                        "energy": 0.9,
+                    })
+
+        result["clips"] = result["clips"][:3]
+        result["duration"] = duration
+        result["frames_analyzed"] = len(images)
+
+        return result
+
     except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        return {
-            "description": "Video para contenido",
-            "hashtags": ["viral", "trending", "fyp", "content", "reels"],
-            "suggested_text": "POV",
-            "mood": "energetic",
-        }
+        logger.error(f"Gemini analysis error: {e}")
+        return default_analysis(duration)
     finally:
-        if os.path.exists(frame_path):
-            try:
-                os.remove(frame_path)
-            except Exception:
-                pass
+        for fp in frame_paths:
+            if os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
         try:
-            os.rmdir(frames_dir)
+            os.rmdir(os.path.dirname(frame_paths[0])) if frame_paths else None
         except Exception:
             pass
+
+
+def default_analysis(duration: float) -> dict:
+    return {
+        "productos_detectados": [],
+        "momentos_clave": [],
+        "texto_overlay": "POV",
+        "hashtags": ["pokemon", "pokemonmerch", "pokemonunboxing", "viral", "fyp", "reels", "trending", "pokemonfan", "pokemoncollector", "pokemon toys", "anime", "gaming", "cute", "kawaii", "pokemonart"],
+        "descripcion_para_caption": "Momentos EPICOS con productos Pokemon! #pokemon",
+        "mood": "energetic",
+        "mejor_momento_inicio": 0,
+        "mejor_momento_fin": min(8, duration),
+        "consejo_edicion": "Cortar los momentos mas llamativos",
+        "clips": [{"start": 0, "end": min(8, duration), "energy": 1.0}],
+        "duration": duration,
+        "frames_analyzed": 0,
+    }
