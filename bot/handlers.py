@@ -62,6 +62,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_VIDEO
 
     status_msg = await update.message.reply_text("Recibido! Descargando video...")
+    video_path = None
 
     try:
         file = await context.bot.get_file(video.file_id)
@@ -72,16 +73,15 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_path = os.path.join(TEMP_DIR, f"{update.effective_user.id}{ext}")
         await file.download_to_drive(video_path)
 
-        await status_msg.edit_text("Analizando audio y detectando momentos energeticos...")
+        await status_msg.edit_text("Paso 1/4: Analizando audio...")
         segments = analyze_audio_energy(video_path)
 
-        await status_msg.edit_text("Analizando contenido del video con IA...")
+        await status_msg.edit_text("Paso 2/4: Analizando contenido con IA...")
         video_info = await asyncio.to_thread(analyze_video_content, video_path)
 
         await status_msg.edit_text(
-            f"Editando video...\n"
-            f"Encontre {len(segments)} momentos energeticos\n"
-            f"IA detecto: {video_info.get('mood', 'desconocido')}"
+            f"Paso 3/4: Editando video...\n"
+            f"Moments encontrados: {len(segments)}"
         )
 
         user_id = update.effective_user.id
@@ -99,10 +99,14 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hashtag_str = " ".join([f"#{h}" for h in hashtags])
 
         if not edit_result.get("final") or not os.path.exists(edit_result["final"]):
-            await status_msg.edit_text("Error al editar el video. Intenta con otro video.")
+            await status_msg.edit_text(
+                "Error: No se pudo crear el video editado.\n"
+                "Intenta con un video mas corto."
+            )
             cleanup_local_files(video_path)
             return WAITING_VIDEO
 
+        await status_msg.edit_text("Paso 4/4: Subiendo a la nube...")
         cloud_result = upload_video(edit_result["final"], folder="edited-videos")
 
         user_sessions[user_id] = {
@@ -123,32 +127,38 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await status_msg.edit_text("Video editado! Revisalo:")
+        await status_msg.edit_text("Video listo! Enviando...")
 
         with open(edit_result["final"], "rb") as video_file:
             await context.bot.send_video(
                 chat_id=update.effective_chat.id,
                 video=video_file,
                 caption=(
-                    f"Video editado automaticamente\n\n"
-                    f"Hashtags para Instagram:\n{hashtag_str}\n\n"
-                    f"Descripcion IA: {video_info.get('description', 'N/A')}"
+                    f"Video editado\n\n"
+                    f"Hashtags:\n{hashtag_str}\n\n"
+                    f"{video_info.get('description', '')}"
                 ),
             )
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Aprobado? Haz clic en el boton:",
+            text="Aprobar o rechazar?",
             reply_markup=reply_markup,
         )
 
         cleanup_local_files(edit_result["final"])
-
         return WAITING_APPROVAL
 
     except Exception as e:
-        await status_msg.edit_text(f"Error procesando video: {str(e)}")
-        cleanup_local_files(video_path)
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"ERROR: {error_detail}")
+        await status_msg.edit_text(
+            f"Error: {str(e)[:200]}\n\n"
+            "Intenta con un video mas corto o diferente formato."
+        )
+        if video_path:
+            cleanup_local_files(video_path)
         return WAITING_VIDEO
 
 
