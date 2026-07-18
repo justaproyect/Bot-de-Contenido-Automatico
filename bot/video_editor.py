@@ -212,8 +212,8 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 
         if beats and len(beats) >= 4:
             usable = [b for b in beats if b["time"] + 1.5 < vid_dur]
-            step = max(1, len(usable) // 6)
-            selected = usable[::step][:6]
+            step = max(1, len(usable) // 4)
+            selected = usable[::step][:4]
 
             for i, beat in enumerate(selected):
                 start = beat["time"]
@@ -234,14 +234,14 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 
         if not clip_paths:
             logger.info("No beat clips, making default clips")
-            positions = [0, vid_dur * 0.25, vid_dur * 0.5, vid_dur * 0.75]
-            for i, pos in enumerate(positions[:4]):
+            positions = [0, vid_dur * 0.33, vid_dur * 0.66]
+            for i, pos in enumerate(positions[:3]):
                 if pos + 2 > vid_dur:
                     continue
                 clip_path = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
                 effect = effects[i % len(effects)]
                 tf = text_f if i == 0 else ""
-                if make_clip(video_path, pos, 2.5, clip_path, effect, tf):
+                if make_clip(video_path, pos, 2.0, clip_path, effect, tf):
                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
                         clip_paths.append(clip_path)
 
@@ -283,8 +283,10 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 def compress_for_telegram(video_path: str, output_path: str, max_size_mb: int = 45) -> str:
     if not os.path.exists(video_path):
         return video_path
-    if os.path.getsize(video_path) / (1024 * 1024) <= max_size_mb:
+    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    if file_size_mb <= max_size_mb:
         return video_path
+
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",

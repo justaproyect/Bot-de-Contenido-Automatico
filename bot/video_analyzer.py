@@ -63,14 +63,14 @@ def analyze_video(video_path: str) -> dict:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.0-flash")
 
-    frame_paths = extract_frames(video_path, num_frames=8)
+    frame_paths = extract_frames(video_path, num_frames=4)
 
     if not frame_paths:
         return default_analysis(duration)
 
     try:
         import PIL.Image
-        images = [PIL.Image.open(fp) for fp in frame_paths if os.path.exists(fp)]
+        images = [PIL.Image.open(fp) for fp in frame_paths[:4] if os.path.exists(fp)]
 
         prompt = f"""Eres editor de contenido Pokemon para Instagram Reels. Video dura {duration:.1f}s.
 

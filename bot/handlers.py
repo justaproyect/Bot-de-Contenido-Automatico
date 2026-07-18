@@ -75,7 +75,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         analysis = await asyncio.wait_for(
             asyncio.to_thread(analyze_video, video_path),
-            timeout=60
+            timeout=45
         )
 
         productos = analysis.get("productos_detectados", [])
@@ -99,12 +99,15 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         output_path = os.path.join(TEMP_DIR, f"{user_id}_final.mp4")
 
-        edit_result = await asyncio.to_thread(
-            edit_video,
-            video_path,
-            clips,
-            analysis,
-            output_path,
+        edit_result = await asyncio.wait_for(
+            asyncio.to_thread(
+                edit_video,
+                video_path,
+                clips,
+                analysis,
+                output_path,
+            ),
+            timeout=90
         )
 
         hashtags = analysis.get("hashtags", ["pokemon", "viral", "fyp"])
