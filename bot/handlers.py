@@ -33,12 +33,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "Hola! Soy tu editor de contenido Pokemon.\n\n"
-        "Envia un video y yo:\n"
-        "- Analizo que Pokemon y productos aparecen\n"
-        "- Selecciono los mejores momentos\n"
-        "- Creo texto gancho y hashtags\n"
-        "- Editos el video automaticamente\n\n"
+        "Pokemon Content Creator Bot\n\n"
+        "Envia un video y yo creo contenido viral:\n"
+        "- Detecto productos Pokemon\n"
+        "- Genero textos gancho\n"
+        "- Corto al ritmo de la musica\n"
+        "- Agrego efectos zoom\n\n"
         "Envia tu video!"
     )
     return WAITING_VIDEO
@@ -46,15 +46,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("No tienes acceso a este bot.")
+        await update.message.reply_text("No tienes acceso.")
         return ConversationHandler.END
 
     video = update.message.video or update.message.document
     if not video:
-        await update.message.reply_text("Por favor envia un video.")
+        await update.message.reply_text("Envia un video.")
         return WAITING_VIDEO
 
-    status_msg = await update.message.reply_text("Recibido! Analizando video con IA...")
+    status_msg = await update.message.reply_text("Analizando video con Gemini...")
     video_path = None
 
     try:
@@ -66,49 +66,48 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_path = os.path.join(TEMP_DIR, f"{update.effective_user.id}{ext}")
         await file.download_to_drive(video_path)
 
-        await status_msg.edit_text("Gemini esta analizando el video...")
+        await status_msg.edit_text("Gemini analizando frames...")
 
         analysis = await asyncio.to_thread(analyze_video, video_path)
 
         productos = analysis.get("productos_detectados", [])
-        texto = analysis.get("texto_overlay", "POV")
-        mood = analysis.get("mood", "energetic")
-        consejo = analysis.get("consejo_edicion", "")
-
-        productos_str = ", ".join(productos[:5]) if productos else "Detectando..."
+        texto1 = analysis.get("texto_principal", "POV")
+        texto2 = analysis.get("texto_secundario", "")
+        estilo = analysis.get("estilo_texto", "impactante")
+        caption = analysis.get("caption", "Pokemon content!")
+        cta = analysis.get("call_to_action", "")
+        emocion = analysis.get("emocion_objetivo", "")
 
         await status_msg.edit_text(
             f"Gemini detecto:\n"
-            f"- Productos: {productos_str}\n"
-            f"- Mood: {mood}\n"
-            f"- Texto: {texto}\n"
+            f"- Productos: {', '.join(productos[:3])}\n"
+            f"- Texto: {texto1}\n"
+            f"- Estilo: {estilo}\n"
             f"- Editando..."
         )
 
         clips = analysis.get("clips", [{"start": 0, "end": 8, "energy": 1.0}])
 
         user_id = update.effective_user.id
-        output_path = os.path.join(TEMP_DIR, f"{user_id}_edited.mp4")
+        output_path = os.path.join(TEMP_DIR, f"{user_id}_final.mp4")
 
         edit_result = await asyncio.to_thread(
             edit_video,
             video_path,
             clips,
-            texto,
+            analysis,
             output_path,
         )
 
         hashtags = analysis.get("hashtags", ["pokemon", "viral", "fyp"])
         hashtag_str = " ".join([f"#{h}" for h in hashtags])
 
-        caption = analysis.get("descripcion_para_caption", "Pokemon content!")
-
         if not edit_result.get("final") or not os.path.exists(edit_result["final"]):
             await status_msg.edit_text("Error al editar. Intenta con otro video.")
             cleanup_local_files(video_path)
             return WAITING_VIDEO
 
-        await status_msg.edit_text("Subiendo video...")
+        await status_msg.edit_text("Subiendo a la nube...")
         cloud_result = upload_video(edit_result["final"], folder="pokemon-content")
 
         user_sessions[user_id] = {
@@ -118,6 +117,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "cloud_public_id": cloud_result.get("public_id"),
             "hashtags": hashtag_str,
             "caption": caption,
+            "cta": cta,
             "analysis": analysis,
         }
 
@@ -142,18 +142,21 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=f"{caption}\n\n{hashtag_str}",
             )
 
-        analysis_msg = (
-            f"Analisis Gemini:\n"
-            f"- Productos: {productos_str}\n"
-            f"- Momentos clave: {len(analysis.get('momentos_clave', []))}\n"
-            f"- Frames analizados: {analysis.get('frames_analyzed', 0)}\n"
-        )
-        if consejo:
-            analysis_msg += f"- Consejo: {consejo}\n"
+        info_text = f"Analisis Gemini:\n"
+        info_text += f"- Productos: {', '.join(productos[:5])}\n"
+        info_text += f"- Texto: {texto1}"
+        if texto2:
+            info_text += f" / {texto2}"
+        info_text += f"\n- Estilo: {estilo}\n"
+        info_text += f"- Mood: {analysis.get('mood', 'N/A')}\n"
+        if emocion:
+            info_text += f"- Emocion: {emocion}\n"
+        if cta:
+            info_text += f"- CTA: {cta}\n"
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=analysis_msg,
+            text=info_text,
             reply_markup=reply_markup,
         )
 
@@ -163,9 +166,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         import traceback
         print(f"ERROR: {traceback.format_exc()}")
-        await status_msg.edit_text(
-            f"Error: {str(e)[:200]}\nIntenta con otro video."
-        )
+        await status_msg.edit_text(f"Error: {str(e)[:200]}\nIntenta con otro video.")
         if video_path:
             cleanup_local_files(video_path)
         return WAITING_VIDEO
@@ -190,16 +191,21 @@ async def handle_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(info_file, "w", encoding="utf-8") as f:
             f.write(f"Caption: {session['caption']}\n\n")
             f.write(f"Hashtags: {session['hashtags']}\n\n")
+            if session.get("cta"):
+                f.write(f"CTA: {session['cta']}\n\n")
             if session.get("analysis"):
                 import json
-                f.write(f"Analisis completo:\n{json.dumps(session['analysis'], indent=2, ensure_ascii=False)}")
+                f.write(f"Analisis:\n{json.dumps(session['analysis'], indent=2, ensure_ascii=False)}")
 
-        caption = f"Video aprobado!\n\nCaption:\n{session['caption']}\n\nHashtags:\n{session['hashtags']}"
-
+        msg = f"APROBADO!\n\n"
+        msg += f"Caption:\n{session['caption']}\n\n"
+        msg += f"Hashtags:\n{session['hashtags']}\n\n"
+        if session.get("cta"):
+            msg += f"CTA: {session['cta']}\n\n"
         if session.get("cloud_url"):
-            caption += f"\n\nLink: {session['cloud_url']}"
+            msg += f"Link: {session['cloud_url']}\n"
 
-        await query.edit_message_text(caption)
+        await query.edit_message_text(msg)
         cleanup_local_files(session.get("video_path"), session.get("edited_path"))
         del user_sessions[user_id]
         return ConversationHandler.END

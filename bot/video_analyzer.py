@@ -72,32 +72,42 @@ def analyze_video(video_path: str) -> dict:
         import PIL.Image
         images = [PIL.Image.open(fp) for fp in frame_paths if os.path.exists(fp)]
 
-        prompt = f"""Eres un editor profesional de contenido para Instagram Reels/TikTok. 
+        prompt = f"""Eres el mejor editor de contenido viral para Instagram Reels y TikTok.
+Tu cliente vende ARTICULOS POKEMON (figuras, peluches, cartas, etc).
 El video dura {duration:.1f} segundos.
 
-Tu cliente vende ARTICULOS POKEMON (figuras, peluches, cartas, etc).
-Tu tarea es analizar este video y crear el MEJOR contenido posible.
+ANALIZA cada frame y crea contenido que Generara MILLONES de vistas.
 
-Analiza cada frame cuidadosamente. Identifica:
-1. Que productos Pokemon aparecen
-2. Que momentos son mas impactantes o llamativos
-3. Que texto gancho funcionaria mejor
-4. El mood general del video
-
-Responde SOLO con este JSON (sin nada mas):
+Responde SOLO con este JSON:
 {{
     "productos_detectados": ["lista de productos Pokemon que ves"],
-    "momentos_clave": [
-        {{"inicio": 0.0, "fin": 5.0, "razon": "por que este momento es bueno"}}
-    ],
-    "texto_overlay": "TEXTO GANCHO que aparece en el video (maximo 6 palabras, estilo POV o gancho)",
-    "hashtags": ["15 hashtags relevantes para Pokemon, merchandise, unboxing, reels, viral"],
-    "descripcion_para_caption": "Caption llamativo para Instagram (1-2 lineas, con emojis)",
-    "mood": "energetic/calm/funny/dramatic",
+    "texto_principal": "TEXTO GANCHO PRINCIPAL (maximo 5 palabras, que enganche al ver el video)",
+    "texto_secundario": "TEXTO SECUNDARIO que aparece despues (maximo 4 palabras, que complemente)",
+    "estilo_texto": "impactante/emocional/curioso/divertido/urgente",
+    "posicion_texto": "centro/arriba/abajo",
+    "hashtags": ["15 hashtags virales para Pokemon merchandise"],
+    "caption": "Caption llamativo para Instagram con emojis (1-2 lineas)",
+    "call_to_action": "Accion que quieres que haga el viewer (comprar, comentar, compartir)",
     "mejor_momento_inicio": 0.0,
     "mejor_momento_fin": 8.0,
-    "consejo_edicion": "consejo especifico para editar este video"
-}}"""
+    "momentos_clave": [
+        {{"inicio": 0.0, "fin": 3.0, "razon": "momento 1"}}
+    ],
+    "emocion_objetivo": "que emocion debe sentir el viewer",
+    "mood": "energetic/calm/funny/dramatic"
+}}
+
+EJEMPLOS de buenos textos para Pokemon:
+- "TU NO SABIAS QUE EXISTIA" (curioso)
+- "EL POKEMON MAS RARO" (impactante)
+- "TE COMPRAS ESTO?" (urgente)
+- "MIRA LO QUE ENCONTRE" (emocional)
+- "POV: ENCONTRASTE A TU FAVORITO" (divertido)
+- "SOLO LOS FANS REALES SABEN" (exclusivo)
+- "NO VAS A CREER LO QUE VI" (curioso)
+- "EL MEJOR DEAL DE POKEMON" (urgente)
+- "ESTO ES INSANO" (impactante)
+- "QUIERO TODOS" (emocional)"""
 
         response = model.generate_content([prompt] + images)
         text = response.text
@@ -109,54 +119,64 @@ Responde SOLO con este JSON (sin nada mas):
 
         result = json.loads(text.strip())
 
-        result["clips"] = [{
-            "start": result.get("mejor_momento_inicio", 0),
-            "end": result.get("mejor_momento_fin", min(8, duration)),
-            "energy": 1.0,
-        }]
+        result["clips"] = []
+        if "mejor_momento_inicio" in result and "mejor_momento_fin" in result:
+            result["clips"].append({
+                "start": result["mejor_momento_inicio"],
+                "end": result["mejor_momento_fin"],
+                "energy": 1.0,
+            })
 
-        if "momentos_clave" in result and result["momentos_clave"]:
-            for momento in result["momentos_clave"]:
-                if "inicio" in momento and "fin" in momento:
+        if "momentos_clave" in result:
+            for m in result["momentos_clave"]:
+                if "inicio" in m and "fin" in m:
                     result["clips"].append({
-                        "start": momento["inicio"],
-                        "end": momento["fin"],
+                        "start": m["inicio"],
+                        "end": m["fin"],
                         "energy": 0.9,
                     })
 
-        result["clips"] = result["clips"][:3]
+        result["clips"] = result["clips"][:4]
         result["duration"] = duration
         result["frames_analyzed"] = len(images)
+
+        if "texto_principal" not in result:
+            result["texto_principal"] = "POV"
+        if "estilo_texto" not in result:
+            result["estilo_texto"] = "impactante"
+        if "posicion_texto" not in result:
+            result["posicion_texto"] = "centro"
 
         return result
 
     except Exception as e:
-        logger.error(f"Gemini analysis error: {e}")
+        logger.error(f"Gemini error: {e}")
         return default_analysis(duration)
     finally:
         for fp in frame_paths:
             if os.path.exists(fp):
-                try:
-                    os.remove(fp)
-                except Exception:
-                    pass
+                try: os.remove(fp)
+                except: pass
         try:
             os.rmdir(os.path.dirname(frame_paths[0])) if frame_paths else None
-        except Exception:
-            pass
+        except: pass
 
 
 def default_analysis(duration: float) -> dict:
     return {
         "productos_detectados": [],
-        "momentos_clave": [],
-        "texto_overlay": "POV",
+        "texto_principal": "POKEMON EXCLUSIVO",
+        "texto_secundario": "MIRA ESTO",
+        "estilo_texto": "impactante",
+        "posicion_texto": "centro",
         "hashtags": ["pokemon", "pokemonmerch", "pokemonunboxing", "viral", "fyp", "reels", "trending", "pokemonfan", "pokemoncollector", "pokemon toys", "anime", "gaming", "cute", "kawaii", "pokemonart"],
-        "descripcion_para_caption": "Momentos EPICOS con productos Pokemon! #pokemon",
-        "mood": "energetic",
+        "caption": "Productos Pokemon que NO te puedes perder! #pokemon",
+        "call_to_action": "Visita nuestra tienda!",
         "mejor_momento_inicio": 0,
         "mejor_momento_fin": min(8, duration),
-        "consejo_edicion": "Cortar los momentos mas llamativos",
+        "momentos_clave": [],
+        "emocion_objetivo": "exclusividad y coleccionismo",
+        "mood": "energetic",
         "clips": [{"start": 0, "end": min(8, duration), "energy": 1.0}],
         "duration": duration,
         "frames_analyzed": 0,
