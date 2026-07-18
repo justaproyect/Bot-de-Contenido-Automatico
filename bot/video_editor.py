@@ -27,11 +27,11 @@ def get_music_path() -> str:
     return os.path.join(MUSIC_DIR, files[0]) if files else ""
 
 
-def run_ffmpeg(cmd: list[str], timeout: int = 90) -> bool:
+def run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
-            logger.error(f"FFmpeg: {result.stderr[:300]}")
+            logger.error(f"FFmpeg: {result.stderr[:200]}")
             return False
         return True
     except Exception as e:
@@ -68,7 +68,6 @@ def get_font_path() -> str:
     for f in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
         "C:/Windows/Fonts/impact.ttf",
     ]:
@@ -77,174 +76,86 @@ def get_font_path() -> str:
     return ""
 
 
-def build_text_filter(text: str, font_path: str, estilo: str = "impactante", posicion: str = "centro", fontsize: int = 48) -> str:
-    if not text or not font_path:
-        return ""
-
-    escaped = text.replace("'", "\\'").replace(":", "\\:").replace("\\", "\\\\")
-
-    pos_map = {
-        "centro": "(w-text_w)/2:(h-text_h)/2",
-        "arriba": "(w-text_w)/2:h*0.08",
-        "abajo": "(w-text_w)/2:h*0.85",
-    }
-    xy = pos_map.get(posicion, pos_map["centro"])
-
-    color_map = {
-        "impactante": "white",
-        "emocional": "#FFD700",
-        "curioso": "#00FFFF",
-        "divertido": "#FF69B4",
-        "urgente": "#FF4444",
-    }
-    color = color_map.get(estilo, "white")
-
-    size_map = {
-        "impactante": 56,
-        "emocional": 44,
-        "curioso": 48,
-        "divertido": 50,
-        "urgente": 54,
-    }
-    final_size = size_map.get(estilo, fontsize)
-
-    return (
-        f"drawtext=fontfile='{font_path}'"
-        f":text='{escaped}'"
-        f":fontsize={final_size}"
-        f":fontcolor={color}"
-        f":x={xy.split(':')[0]}"
-        f":y={xy.split(':')[1]}"
-        f":borderw=3"
-        f":bordercolor=black"
-        f":shadowcolor=black@0.6"
-        f":shadowx=3"
-        f":shadowy=3"
-    )
-
-
-def build_dual_text_filter(text1: str, text2: str, font_path: str, estilo: str, posicion: str) -> str:
+def build_text_filter(text1: str, text2: str, font_path: str, estilo: str, posicion: str) -> str:
     if not font_path:
         return ""
 
-    filter_parts = []
+    color_map = {"impactante": "white", "emocional": "#FFD700", "curioso": "#00FFFF", "divertido": "#FF69B4", "urgente": "#FF4444"}
+    color = color_map.get(estilo, "white")
+    pos_y = "(h-text_h)/2" if posicion == "centro" else ("h*0.08" if posicion == "arriba" else "h*0.85")
 
+    parts = []
     if text1:
         e1 = text1.replace("'", "\\'").replace(":", "\\:")
-        pos1 = "centro" if posicion == "centro" else "arriba"
-        y1 = "(h-text_h)/2-40" if pos1 == "centro" else "h*0.08"
-
-        color_map = {"impactante": "white", "emocional": "#FFD700", "curioso": "#00FFFF", "divertido": "#FF69B4", "urgente": "#FF4444"}
-        color1 = color_map.get(estilo, "white")
-
-        filter_parts.append(
-            f"drawtext=fontfile='{font_path}'"
-            f":text='{e1}'"
-            f":fontsize=52"
-            f":fontcolor={color1}"
-            f":x=(w-text_w)/2:y={y1}"
-            f":borderw=3:bordercolor=black"
-        )
-
+        parts.append(f"drawtext=fontfile='{font_path}':text='{e1}':fontsize=52:fontcolor={color}:x=(w-text_w)/2:y={pos_y}:borderw=3:bordercolor=black")
     if text2:
         e2 = text2.replace("'", "\\'").replace(":", "\\:")
-        y2 = "(h-text_h)/2+40" if posicion == "centro" else "h*0.85"
+        y2 = "h*0.08" if posicion == "centro" else "h*0.85"
+        parts.append(f"drawtext=fontfile='{font_path}':text='{e2}':fontsize=36:fontcolor=white@0.9:x=(w-text_w)/2:y={y2}:borderw=2:bordercolor=black@0.8")
 
-        filter_parts.append(
-            f"drawtext=fontfile='{font_path}'"
-            f":text='{e2}'"
-            f":fontsize=38"
-            f":fontcolor=white@0.9"
-            f":x=(w-text_w)/2:y={y2}"
-            f":borderw=2:bordercolor=black@0.8"
-        )
-
-    return ",".join(filter_parts)
+    return ",".join(parts)
 
 
-def create_clip(
-    video_path: str,
-    start: float,
-    duration: float,
-    output_path: str,
-    zoom_type: str = "in",
-    text_filter: str = "",
-) -> bool:
-
+def create_clip(video_path: str, start: float, duration: float, output_path: str, zoom_type: str, text_filter: str = "") -> bool:
     total_frames = int(duration * 30)
 
-    zoom_map = {
-        "in": f"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
-        "out": f"zoompan=z='if(eq(on,1),1.3,max(zoom-0.0015,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
-        "pan": f"zoompan=z='1.08':x='iw/2-(iw/zoom/2)+sin(on/15)*25':y='ih/2-(ih/zoom/2)+cos(on/12)*20':d={total_frames}:s=720x1280:fps=30",
-        "shake": f"zoompan=z='1.05':x='iw/2-(iw/zoom/2)+sin(on/8)*30':y='ih/2-(ih/zoom/2)+cos(on/6)*25':d={total_frames}:s=720x1280:fps=30",
-        "slide": f"zoompan=z='1.0':x='if(eq(on,1),0,min(x+3,iw-iw/zoom))':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
+    zooms = {
+        "in": f"zoompan=z='min(zoom+0.002,1.35)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
+        "out": f"zoompan=z='if(eq(on,1),1.35,max(zoom-0.002,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
+        "pan": f"zoompan=z='1.1':x='iw/2-(iw/zoom/2)+sin(on/12)*30':y='ih/2-(ih/zoom/2)+cos(on/10)*20':d={total_frames}:s=720x1280:fps=30",
+        "shake": f"zoompan=z='1.05':x='iw/2-(iw/zoom/2)+sin(on/6)*35':y='ih/2-(ih/zoom/2)+cos(on/5)*30':d={total_frames}:s=720x1280:fps=30",
+        "slide": f"zoompan=z='1.08':x='if(eq(on,1),iw*0.1,min(x+4,iw*0.9))':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
     }
 
-    zoom = zoom_map.get(zoom_type, zoom_map["in"])
-
+    vf = zooms.get(zoom_type, zooms["in"])
     if text_filter:
-        vf = f"{zoom},{text_filter}"
-    else:
-        vf = zoom
+        vf = f"{vf},{text_filter}"
 
     cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(start),
-        "-i", video_path,
-        "-t", str(duration),
+        "ffmpeg", "-y", "-ss", str(start), "-i", video_path, "-t", str(duration),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-        "-c:a", "aac", "-b:a", "96k",
-        "-movflags", "+faststart",
-        output_path,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "64k",
+        "-movflags", "+faststart", output_path,
     ]
     return run_ffmpeg(cmd, timeout=90)
 
 
-def merge_clips(clip_paths: list[str], music_path: str, output_path: str) -> bool:
-    if not clip_paths:
-        return False
-
+def concat_and_add_music(clip_paths: list[str], music_path: str, output_path: str) -> bool:
     concat_file = tempfile.mktemp(suffix=".txt")
     with open(concat_file, "w") as f:
-        for clip in clip_paths:
-            f.write(f"file '{clip}'\n")
+        for c in clip_paths:
+            f.write(f"file '{c}'\n")
 
     temp_concat = tempfile.mktemp(suffix=".mp4")
-    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", temp_concat]
-    run_ffmpeg(cmd, timeout=60)
+    run_ffmpeg(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", temp_concat], timeout=60)
 
     if not os.path.exists(temp_concat):
         return False
 
+    total_dur = get_duration(temp_concat)
+
     if music_path and os.path.exists(music_path):
-        concat_dur = get_duration(temp_concat)
         cmd = [
-            "ffmpeg", "-y",
-            "-i", temp_concat,
-            "-i", music_path,
+            "ffmpeg", "-y", "-i", temp_concat, "-i", music_path,
             "-filter_complex",
             f"[0:a]volume=2.0[orig];"
-            f"[1:a]volume=0.2,aloop=loop=-1:size=2e+09,atrim=0:{concat_dur}[bg];"
-            f"[orig][bg]amix=inputs=2:duration=first:dropout_transition=2[mixed];"
-            f"[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[aout]",
-            "-map", "0:v", "-map", "[aout]",
+            f"[1:a]volume=0.2,aloop=loop=-1:size=2e+09,atrim=0:{total_dur}[bg];"
+            f"[orig][bg]amix=inputs=2:duration=first:dropout_transition=2[m];"
+            f"[m]loudnorm=I=-16:TP=-1.5[a]",
+            "-map", "0:v", "-map", "[a]",
             "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart",
-            output_path,
+            "-shortest", "-movflags", "+faststart", output_path,
         ]
-        success = run_ffmpeg(cmd, timeout=90)
+        ok = run_ffmpeg(cmd, timeout=90)
     else:
-        cmd = ["ffmpeg", "-y", "-i", temp_concat, "-c", "copy", "-movflags", "+faststart", output_path]
-        success = run_ffmpeg(cmd, timeout=60)
+        ok = run_ffmpeg(["ffmpeg", "-y", "-i", temp_concat, "-c", "copy", "-movflags", "+faststart", output_path], timeout=60)
 
     for f in [concat_file, temp_concat]:
         if os.path.exists(f):
             try: os.remove(f)
             except: pass
-
-    return success and os.path.exists(output_path)
+    return ok and os.path.exists(output_path)
 
 
 def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: str | None = None) -> dict:
@@ -255,7 +166,7 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
         font_path = get_font_path()
         music_path = get_music_path()
         beats = detect_music_beats(music_path) if music_path else []
-        video_duration = get_duration(video_path)
+        video_dur = get_duration(video_path)
 
         if not output_path:
             base = os.path.splitext(os.path.basename(video_path))[0]
@@ -265,23 +176,24 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
         texto2 = analysis.get("texto_secundario", "")
         estilo = analysis.get("estilo_texto", "impactante")
         posicion = analysis.get("posicion_texto", "centro")
+        text_filter = build_text_filter(texto1, texto2, font_path, estilo, posicion)
 
-        text_filter = build_dual_text_filter(texto1, texto2, font_path, estilo, posicion)
-
-        clip_paths = []
         zoom_types = ["in", "out", "pan", "shake", "slide"]
+        clip_paths = []
 
-        if beats and len(beats) >= 3:
-            num_clips = min(len(beats), 6)
-            step = max(1, len(beats) // num_clips)
+        if beats and len(beats) >= 4:
+            usable = [b for b in beats if b["time"] < video_dur - 1]
+            num_clips = min(len(usable), 8)
+            step = max(1, len(usable) // num_clips)
+
             for i in range(num_clips):
                 idx = i * step
-                if idx >= len(beats):
+                if idx >= len(usable):
                     break
-                start = beats[idx]["time"]
-                dur = max(1.5, min(beats[idx]["duration"] * 2, 4.0))
-                if start + dur > video_duration:
-                    dur = video_duration - start
+                start = usable[idx]["time"]
+                dur = max(1.5, min(usable[idx]["duration"] * 2.5, 4.0))
+                if start + dur > video_dur:
+                    dur = video_dur - start
                 if dur < 1.0:
                     continue
 
@@ -293,11 +205,11 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
                         clip_paths.append(clip_path)
 
         if not clip_paths and clips:
-            for i, clip in enumerate(clips[:4]):
+            for i, clip in enumerate(clips[:6]):
                 start = clip.get("start", 0)
-                dur = min(clip.get("end", 8) - start, 5)
+                dur = min(clip.get("end", 5) - start, 4)
                 if dur < 1.5:
-                    dur = 3.0
+                    dur = 3
                 clip_path = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
                 zoom = zoom_types[i % len(zoom_types)]
                 tf = text_filter if i == 0 else ""
@@ -307,11 +219,11 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 
         if not clip_paths:
             clip_path = os.path.join(temp_dir, "default.mp4")
-            if create_clip(video_path, 0, min(8, video_duration), clip_path, "in", text_filter):
+            if create_clip(video_path, 0, min(6, video_dur), clip_path, "in", text_filter):
                 if os.path.exists(clip_path):
                     clip_paths.append(clip_path)
 
-        if clip_paths and merge_clips(clip_paths, music_path, output_path):
+        if clip_paths and concat_and_add_music(clip_paths, music_path, output_path):
             result["final"] = output_path
         elif clip_paths:
             import shutil
@@ -328,8 +240,7 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 def compress_for_telegram(video_path: str, output_path: str, max_size_mb: int = 45) -> str:
     if not os.path.exists(video_path):
         return video_path
-    size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if size_mb <= max_size_mb:
+    if os.path.getsize(video_path) / (1024 * 1024) <= max_size_mb:
         return video_path
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
