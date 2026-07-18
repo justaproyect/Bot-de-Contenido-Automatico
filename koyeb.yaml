@@ -1,0 +1,12 @@
+services:
+  - name: telegram-content-bot
+    type: worker
+    runtime: docker
+    dockerfile_path: Dockerfile
+    env:
+      - name: TELEGRAM_BOT_TOKEN
+        type: secret
+      - name: GEMINI_API_KEY
+        type: secret
+      - name: ALLOWED_USERS
+        value: ""
