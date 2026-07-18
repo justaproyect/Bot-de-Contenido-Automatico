@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from bot.config import TELEGRAM_BOT_TOKEN, OUTPUT_DIR, TEMP_DIR, ALLOWED_USERS
 from bot.video_analyzer import analyze_video
-from bot.video_editor import edit_video, compress_for_telegram
+from bot.video_editor import edit_video, compress_for_telegram, validate_video
 from bot.storage import upload_video, delete_video, cleanup_local_files
 
 WAITING_VIDEO, WAITING_APPROVAL = range(2)
@@ -65,6 +65,11 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         video_path = os.path.join(TEMP_DIR, f"{update.effective_user.id}{ext}")
         await file.download_to_drive(video_path)
+
+        if not validate_video(video_path):
+            await status_msg.edit_text("Video invalido o muy corto. Intenta con otro.")
+            cleanup_local_files(video_path)
+            return WAITING_VIDEO
 
         await status_msg.edit_text("Gemini analizando...")
 

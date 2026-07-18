@@ -18,6 +18,7 @@ except ImportError:
     NUMPY_AVAILABLE = False
 
 from bot.config import MUSIC_DIR
+from bot.music_downloader import get_music_path as get_music_file
 
 
 def get_music_path() -> str:
@@ -114,6 +115,21 @@ def make_clip(video_path: str, start: float, dur: float, output: str, effect: st
     return run_ffmpeg(cmd, timeout=45)
 
 
+def validate_video(video_path: str) -> bool:
+    if not os.path.exists(video_path):
+        return False
+    if os.path.getsize(video_path) < 1000:
+        return False
+    try:
+        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", video_path]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        data = __import__("json").loads(r.stdout)
+        duration = float(data["format"]["duration"])
+        return 1.0 < duration < 300.0
+    except Exception:
+        return False
+
+
 def concat_clips(clips: list[str], output: str) -> bool:
     if not clips:
         return False
@@ -175,7 +191,8 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
 
     try:
         font = get_font()
-        music = get_music_path()
+        mood = analysis.get("mood", "energetic")
+        music = get_music_file(mood)
         beats = detect_beats(music) if music else []
         vid_dur = get_duration(video_path)
 

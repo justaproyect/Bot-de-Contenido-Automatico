@@ -9,6 +9,7 @@ ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
+JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
 TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", "temp")
