@@ -22,45 +22,60 @@ def get_music_path() -> str:
     return ""
 
 
-def run_ffmpeg(cmd: list[str]) -> bool:
+def run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=300
+            cmd, capture_output=True, text=True, timeout=timeout
         )
+        if result.returncode != 0:
+            logger.error(f"FFmpeg error: {result.stderr[:300]}")
+            return False
         return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg error: {e.stderr[:500]}")
-        return False
     except subprocess.TimeoutExpired:
         logger.error("FFmpeg timed out")
         return False
-    except FileNotFoundError:
-        logger.error("FFmpeg not found")
+    except Exception as e:
+        logger.error(f"FFmpeg exception: {e}")
         return False
 
 
-def cut_clips(video_path: str, segments: list[dict], output_dir: str) -> list[str]:
-    clip_paths = []
-    for i, seg in enumerate(segments):
-        start = seg["start"]
-        duration = min(seg["end"] - seg["start"], CLIP_MAX_DURATION)
-        if duration < CLIP_MIN_DURATION:
-            continue
+def get_video_info(video_path: str) -> dict:
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-show_entries", "stream=width,height,codec_name",
+        "-of", "json", video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        import json
+        data = json.loads(result.stdout)
+        duration = float(data.get("format", {}).get("duration", 0))
+        streams = data.get("streams", [])
+        video_stream = next((s for s in streams if s.get("codec_name") in ["h264", "hevc", "vp9"]), streams[0] if streams else {})
+        return {
+            "duration": duration,
+            "width": int(video_stream.get("width", 720)),
+            "height": int(video_stream.get("height", 1280)),
+        }
+    except Exception:
+        return {"duration": 0, "width": 720, "height": 1280}
 
-        clip_path = os.path.join(output_dir, f"clip_{i:03d}.mp4")
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", str(start),
-            "-i", video_path,
-            "-t", str(duration),
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            clip_path,
-        ]
-        if run_ffmpeg(cmd) and os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
-            clip_paths.append(clip_path)
-    return clip_paths
+
+def cut_single_clip(video_path: str, start: float, duration: float, output_path: str) -> bool:
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-i", video_path,
+        "-t", str(duration),
+        "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "64k", "-ar", "44100",
+        "-movflags", "+faststart",
+        "-max_muxing_queue_size", "1024",
+        output_path,
+    ]
+    return run_ffmpeg(cmd, timeout=60)
 
 
 def concatenate_clips(clip_paths: list[str], output_path: str) -> str:
@@ -68,16 +83,9 @@ def concatenate_clips(clip_paths: list[str], output_path: str) -> str:
         return ""
 
     if len(clip_paths) == 1:
-        cmd = [
-            "ffmpeg", "-y", "-i", clip_paths[0],
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac",
-            "-movflags", "+faststart",
-            output_path,
-        ]
-        if run_ffmpeg(cmd):
+        if cut_single_clip(clip_paths[0], 0, CLIP_MAX_DURATION, output_path):
             return output_path
-        return clip_paths[0]
+        return clip_paths[0] if os.path.exists(clip_paths[0]) else ""
 
     concat_file = tempfile.mktemp(suffix=".txt", dir=os.path.dirname(output_path))
     with open(concat_file, "w") as f:
@@ -87,65 +95,61 @@ def concatenate_clips(clip_paths: list[str], output_path: str) -> str:
     cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
         "-i", concat_file,
-        "-c:v", "libx264", "-preset", "ultrafast",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "64k",
         "-movflags", "+faststart",
+        "-max_muxing_queue_size", "1024",
         output_path,
     ]
-    run_ffmpeg(cmd)
+    run_ffmpeg(cmd, timeout=90)
     if os.path.exists(concat_file):
         os.remove(concat_file)
 
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         return output_path
-    return clip_paths[0]
+    return clip_paths[0] if clip_paths else ""
 
 
 def add_text_overlay(video_path: str, text: str, output_path: str) -> str:
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    linux_fonts = [
+    font_path = None
+    font_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/impact.ttf",
     ]
-    for f in linux_fonts:
+    for f in font_candidates:
         if os.path.exists(f):
             font_path = f
             break
 
-    win_fonts = [
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/impact.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-    ]
-    for f in win_fonts:
-        if os.path.exists(f):
-            font_path = f
-            break
+    if not font_path:
+        return video_path
 
     escaped_text = text.replace("'", "\\'").replace(":", "\\:").replace("\\", "\\\\")
 
     drawtext = (
         f"drawtext=fontfile='{font_path}'"
         f":text='{escaped_text}'"
-        f":fontsize=60"
+        f":fontsize=48"
         f":fontcolor=white"
         f":x=(w-text_w)/2"
         f":y=(h-text_h)/2"
-        f":borderw=3"
+        f":borderw=2"
         f":bordercolor=black"
     )
 
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-vf", drawtext,
-        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
         "-c:a", "copy",
         "-movflags", "+faststart",
         output_path,
     ]
-    if run_ffmpeg(cmd) and os.path.exists(output_path):
+    if run_ffmpeg(cmd, timeout=60) and os.path.exists(output_path):
         return output_path
     return video_path
 
@@ -164,12 +168,12 @@ def add_background_music(video_path: str, music_path: str, output_path: str) -> 
         f"[original][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
         "-map", "0:v", "-map", "[aout]",
         "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
+        "-c:a", "aac", "-b:a", "64k",
         "-shortest",
         "-movflags", "+faststart",
         output_path,
     ]
-    if run_ffmpeg(cmd) and os.path.exists(output_path):
+    if run_ffmpeg(cmd, timeout=60) and os.path.exists(output_path):
         return output_path
     return video_path
 
@@ -191,7 +195,22 @@ def edit_video(
     }
 
     try:
-        clip_paths = cut_clips(video_path, segments, temp_dir)
+        video_info = get_video_info(video_path)
+        max_clips = min(len(segments), 3)
+        active_segments = segments[:max_clips]
+
+        clip_paths = []
+        for i, seg in enumerate(active_segments):
+            start = seg["start"]
+            duration = min(seg["end"] - seg["start"], CLIP_MAX_DURATION)
+            if duration < CLIP_MIN_DURATION:
+                continue
+
+            clip_path = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
+            if cut_single_clip(video_path, start, duration, clip_path):
+                if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                    clip_paths.append(clip_path)
+
         if not clip_paths:
             logger.error("No clips were created")
             return result
