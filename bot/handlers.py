@@ -66,9 +66,12 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_path = os.path.join(TEMP_DIR, f"{update.effective_user.id}{ext}")
         await file.download_to_drive(video_path)
 
-        await status_msg.edit_text("Gemini analizando frames...")
+        await status_msg.edit_text("Gemini analizando...")
 
-        analysis = await asyncio.to_thread(analyze_video, video_path)
+        analysis = await asyncio.wait_for(
+            asyncio.to_thread(analyze_video, video_path),
+            timeout=60
+        )
 
         productos = analysis.get("productos_detectados", [])
         texto1 = analysis.get("texto_principal", "POV")
@@ -163,6 +166,11 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cleanup_local_files(edit_result["final"], compressed_path)
         return WAITING_APPROVAL
 
+    except asyncio.TimeoutError:
+        await status_msg.edit_text("Gemini se tardo mucho. Intenta con un video mas corto.")
+        if video_path:
+            cleanup_local_files(video_path)
+        return WAITING_VIDEO
     except Exception as e:
         import traceback
         print(f"ERROR: {traceback.format_exc()}")

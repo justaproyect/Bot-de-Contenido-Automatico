@@ -29,7 +29,7 @@ def get_video_duration(video_path: str) -> float:
         return 30.0
 
 
-def extract_frames(video_path: str, num_frames: int = 8) -> list[str]:
+def extract_frames(video_path: str, num_frames: int = 4) -> list[str]:
     duration = get_video_duration(video_path)
     frames_dir = tempfile.mkdtemp()
     frame_paths = []
@@ -72,44 +72,32 @@ def analyze_video(video_path: str) -> dict:
         import PIL.Image
         images = [PIL.Image.open(fp) for fp in frame_paths if os.path.exists(fp)]
 
-        prompt = f"""Eres el mejor editor de contenido viral para Instagram Reels y TikTok.
-Tu cliente vende ARTICULOS POKEMON (figuras, peluches, cartas, etc).
-El video dura {duration:.1f} segundos.
+        prompt = f"""Eres editor de contenido Pokemon para Instagram Reels. Video dura {duration:.1f}s.
 
-ANALIZA cada frame y crea contenido que Generara MILLONES de vistas.
-
-Responde SOLO con este JSON:
+Analiza estas frames. Responde SOLO JSON:
 {{
-    "productos_detectados": ["lista de productos Pokemon que ves"],
-    "texto_principal": "TEXTO GANCHO PRINCIPAL (maximo 5 palabras, que enganche al ver el video)",
-    "texto_secundario": "TEXTO SECUNDARIO que aparece despues (maximo 4 palabras, que complemente)",
+    "productos_detectados": ["productos Pokemon que ves"],
+    "texto_principal": "TEXTO GANCHO max 5 palabras",
+    "texto_secundario": "TEXTO SECUNDARIO max 4 palabras",
     "estilo_texto": "impactante/emocional/curioso/divertido/urgente",
     "posicion_texto": "centro/arriba/abajo",
-    "hashtags": ["15 hashtags virales para Pokemon merchandise"],
-    "caption": "Caption llamativo para Instagram con emojis (1-2 lineas)",
-    "call_to_action": "Accion que quieres que haga el viewer (comprar, comentar, compartir)",
+    "hashtags": ["10 hashtags Pokemon viral"],
+    "caption": "Caption Instagram con emojis 1-2 lineas",
+    "call_to_action": "Accion para viewer",
     "mejor_momento_inicio": 0.0,
-    "mejor_momento_fin": 8.0,
-    "momentos_clave": [
-        {{"inicio": 0.0, "fin": 3.0, "razon": "momento 1"}}
-    ],
-    "emocion_objetivo": "que emocion debe sentir el viewer",
+    "mejor_momento_fin": 6.0,
+    "momentos_clave": [{{"inicio": 0.0, "fin": 3.0, "razon": "razon"}}],
+    "emocion_objetivo": "emocion del viewer",
     "mood": "energetic/calm/funny/dramatic"
 }}
 
-EJEMPLOS de buenos textos para Pokemon:
-- "TU NO SABIAS QUE EXISTIA" (curioso)
-- "EL POKEMON MAS RARO" (impactante)
-- "TE COMPRAS ESTO?" (urgente)
-- "MIRA LO QUE ENCONTRE" (emocional)
-- "POV: ENCONTRASTE A TU FAVORITO" (divertido)
-- "SOLO LOS FANS REALES SABEN" (exclusivo)
-- "NO VAS A CREER LO QUE VI" (curioso)
-- "EL MEJOR DEAL DE POKEMON" (urgente)
-- "ESTO ES INSANO" (impactante)
-- "QUIERO TODOS" (emocional)"""
-
-        response = model.generate_content([prompt] + images)
+        response = model.generate_content(
+            [prompt] + images,
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=1000,
+                temperature=0.7,
+            )
+        )
         text = response.text
 
         if "```json" in text:
