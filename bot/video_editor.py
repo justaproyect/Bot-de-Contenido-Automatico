@@ -27,13 +27,16 @@ def get_music_path() -> str:
     return os.path.join(MUSIC_DIR, files[0]) if files else ""
 
 
-def run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
+def run_ffmpeg(cmd: list[str], timeout: int = 60) -> bool:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
-            logger.error(f"FFmpeg: {result.stderr[:200]}")
+            logger.error(f"FFmpeg err: {result.stderr[:300]}")
             return False
         return True
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg timeout")
+        return False
     except Exception as e:
         logger.error(f"FFmpeg: {e}")
         return False
@@ -42,29 +45,29 @@ def run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
 def get_duration(path: str) -> float:
     try:
         cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         return float(__import__("json").loads(r.stdout)["format"]["duration"])
     except Exception:
         return 10.0
 
 
-def detect_music_beats(music_path: str) -> list[dict]:
+def detect_beats(music_path: str) -> list[dict]:
     if not LIBROSA_AVAILABLE or not os.path.exists(music_path):
         return []
     try:
-        y, sr = librosa.load(music_path, sr=22050, duration=60)
+        y, sr = librosa.load(music_path, sr=22050, duration=30)
         tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
         if NUMPY_AVAILABLE and len(beat_times) > 1:
             intervals = np.diff(beat_times)
-            return [{"time": float(beat_times[i]), "duration": float(intervals[i])} for i in range(len(beat_times) - 1)]
-        return [{"time": float(t), "duration": 0.5} for t in beat_times]
+            return [{"time": float(beat_times[i]), "dur": float(intervals[i])} for i in range(len(beat_times) - 1)]
+        return [{"time": float(t), "dur": 0.5} for t in beat_times]
     except Exception as e:
         logger.error(f"Beat error: {e}")
         return []
 
 
-def get_font_path() -> str:
+def get_font() -> str:
     for f in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -76,86 +79,94 @@ def get_font_path() -> str:
     return ""
 
 
-def build_text_filter(text1: str, text2: str, font_path: str, estilo: str, posicion: str) -> str:
-    if not font_path:
+def make_text_filter(text: str, font: str, color: str = "white", y_pos: str = "(h-text_h)/2") -> str:
+    if not text or not font:
         return ""
-
-    color_map = {"impactante": "white", "emocional": "#FFD700", "curioso": "#00FFFF", "divertido": "#FF69B4", "urgente": "#FF4444"}
-    color = color_map.get(estilo, "white")
-    pos_y = "(h-text_h)/2" if posicion == "centro" else ("h*0.08" if posicion == "arriba" else "h*0.85")
-
-    parts = []
-    if text1:
-        e1 = text1.replace("'", "\\'").replace(":", "\\:")
-        parts.append(f"drawtext=fontfile='{font_path}':text='{e1}':fontsize=52:fontcolor={color}:x=(w-text_w)/2:y={pos_y}:borderw=3:bordercolor=black")
-    if text2:
-        e2 = text2.replace("'", "\\'").replace(":", "\\:")
-        y2 = "h*0.08" if posicion == "centro" else "h*0.85"
-        parts.append(f"drawtext=fontfile='{font_path}':text='{e2}':fontsize=36:fontcolor=white@0.9:x=(w-text_w)/2:y={y2}:borderw=2:bordercolor=black@0.8")
-
-    return ",".join(parts)
+    t = text.replace("'", "\\'").replace(":", "\\:")
+    return f"drawtext=fontfile='{font}':text='{t}':fontsize=48:fontcolor={color}:x=(w-text_w)/2:y={y_pos}:borderw=3:bordercolor=black"
 
 
-def create_clip(video_path: str, start: float, duration: float, output_path: str, zoom_type: str, text_filter: str = "") -> bool:
-    total_frames = int(duration * 30)
-
-    zooms = {
-        "in": f"zoompan=z='min(zoom+0.002,1.35)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
-        "out": f"zoompan=z='if(eq(on,1),1.35,max(zoom-0.002,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
-        "pan": f"zoompan=z='1.1':x='iw/2-(iw/zoom/2)+sin(on/12)*30':y='ih/2-(ih/zoom/2)+cos(on/10)*20':d={total_frames}:s=720x1280:fps=30",
-        "shake": f"zoompan=z='1.05':x='iw/2-(iw/zoom/2)+sin(on/6)*35':y='ih/2-(ih/zoom/2)+cos(on/5)*30':d={total_frames}:s=720x1280:fps=30",
-        "slide": f"zoompan=z='1.08':x='if(eq(on,1),iw*0.1,min(x+4,iw*0.9))':y='ih/2-(ih/zoom/2)':d={total_frames}:s=720x1280:fps=30",
+def make_clip(video_path: str, start: float, dur: float, output: str, effect: str, text_f: str = "") -> bool:
+    effects = {
+        "zoom_in": f"scale=840:1500,crop=720:1280:60:110",
+        "zoom_out": f"scale=600:1067,crop=720:1280:-60:-106",
+        "pan_left": f"scale=900:1600,crop=720:1280:180:160",
+        "pan_right": f"scale=900:1600,crop=720:1280:0:160",
+        "shake": f"scale=780:1387,crop=720:1280:30:53",
+        "slide": f"scale=800:1422,crop=720:1280:40:71",
     }
 
-    vf = zooms.get(zoom_type, zooms["in"])
-    if text_filter:
-        vf = f"{vf},{text_filter}"
+    vf = effects.get(effect, effects["zoom_in"])
+    if text_f:
+        vf = f"{vf},{text_f}"
 
     cmd = [
-        "ffmpeg", "-y", "-ss", str(start), "-i", video_path, "-t", str(duration),
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-i", video_path,
+        "-t", str(dur),
         "-vf", vf,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-        "-c:a", "aac", "-b:a", "64k",
-        "-movflags", "+faststart", output_path,
+        "-an",
+        "-movflags", "+faststart",
+        output,
     ]
-    return run_ffmpeg(cmd, timeout=90)
+    return run_ffmpeg(cmd, timeout=45)
 
 
-def concat_and_add_music(clip_paths: list[str], music_path: str, output_path: str) -> bool:
-    concat_file = tempfile.mktemp(suffix=".txt")
-    with open(concat_file, "w") as f:
-        for c in clip_paths:
-            f.write(f"file '{c}'\n")
-
-    temp_concat = tempfile.mktemp(suffix=".mp4")
-    run_ffmpeg(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", temp_concat], timeout=60)
-
-    if not os.path.exists(temp_concat):
+def concat_clips(clips: list[str], output: str) -> bool:
+    if not clips:
         return False
 
-    total_dur = get_duration(temp_concat)
+    if len(clips) == 1:
+        import shutil
+        shutil.copy2(clips[0], output)
+        return os.path.exists(output)
 
-    if music_path and os.path.exists(music_path):
-        cmd = [
-            "ffmpeg", "-y", "-i", temp_concat, "-i", music_path,
-            "-filter_complex",
-            f"[0:a]volume=2.0[orig];"
-            f"[1:a]volume=0.2,aloop=loop=-1:size=2e+09,atrim=0:{total_dur}[bg];"
-            f"[orig][bg]amix=inputs=2:duration=first:dropout_transition=2[m];"
-            f"[m]loudnorm=I=-16:TP=-1.5[a]",
-            "-map", "0:v", "-map", "[a]",
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart", output_path,
-        ]
-        ok = run_ffmpeg(cmd, timeout=90)
-    else:
-        ok = run_ffmpeg(["ffmpeg", "-y", "-i", temp_concat, "-c", "copy", "-movflags", "+faststart", output_path], timeout=60)
+    concat_file = tempfile.mktemp(suffix=".txt")
+    with open(concat_file, "w") as f:
+        for c in clips:
+            f.write(f"file '{c}'\n")
 
-    for f in [concat_file, temp_concat]:
-        if os.path.exists(f):
-            try: os.remove(f)
-            except: pass
-    return ok and os.path.exists(output_path)
+    ok = run_ffmpeg([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", concat_file,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        output,
+    ], timeout=60)
+
+    if os.path.exists(concat_file):
+        try: os.remove(concat_file)
+        except: pass
+
+    return ok and os.path.exists(output) and os.path.getsize(output) > 0
+
+
+def add_music(video_path: str, music_path: str, output: str) -> bool:
+    if not music_path or not os.path.exists(music_path):
+        import shutil
+        shutil.copy2(video_path, output)
+        return True
+
+    dur = get_duration(video_path)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", music_path,
+        "-filter_complex",
+        f"[1:a]volume=0.25,aloop=loop=-1:size=2e+09,atrim=0:{dur},afade=t=in:st=0:d=1,afade=t=out:st={dur-1}:d=1[bg];"
+        f"[0:a]volume=1.8[orig];"
+        f"[orig][bg]amix=inputs=2:duration=first:dropout_transition=2[a]",
+        "-map", "0:v", "-map", "[a]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        "-movflags", "+faststart",
+        output,
+    ]
+    return run_ffmpeg(cmd, timeout=60)
 
 
 def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: str | None = None) -> dict:
@@ -163,75 +174,90 @@ def edit_video(video_path: str, clips: list[dict], analysis: dict, output_path: 
     result = {"original": video_path, "final": None}
 
     try:
-        font_path = get_font_path()
-        music_path = get_music_path()
-        beats = detect_music_beats(music_path) if music_path else []
-        video_dur = get_duration(video_path)
+        font = get_font()
+        music = get_music_path()
+        beats = detect_beats(music) if music else []
+        vid_dur = get_duration(video_path)
+
+        texto1 = analysis.get("texto_principal", "POKEMON")
+        texto2 = analysis.get("texto_secundario", "")
+        estilo = analysis.get("estilo_texto", "impactante")
+        color_map = {"impactante": "white", "emocional": "#FFD700", "curioso": "#00FFFF", "divertido": "#FF69B4", "urgente": "#FF4444"}
+        color = color_map.get(estilo, "white")
+        text_f = make_text_filter(texto1, font, color)
 
         if not output_path:
             base = os.path.splitext(os.path.basename(video_path))[0]
             output_path = os.path.join(temp_dir, f"{base}_final.mp4")
 
-        texto1 = analysis.get("texto_principal", "POV")
-        texto2 = analysis.get("texto_secundario", "")
-        estilo = analysis.get("estilo_texto", "impactante")
-        posicion = analysis.get("posicion_texto", "centro")
-        text_filter = build_text_filter(texto1, texto2, font_path, estilo, posicion)
-
-        zoom_types = ["in", "out", "pan", "shake", "slide"]
+        effects = ["zoom_in", "zoom_out", "pan_left", "pan_right", "shake", "slide"]
         clip_paths = []
 
         if beats and len(beats) >= 4:
-            usable = [b for b in beats if b["time"] < video_dur - 1]
-            num_clips = min(len(usable), 8)
-            step = max(1, len(usable) // num_clips)
+            usable = [b for b in beats if b["time"] + 1.5 < vid_dur]
+            step = max(1, len(usable) // 6)
+            selected = usable[::step][:6]
 
-            for i in range(num_clips):
-                idx = i * step
-                if idx >= len(usable):
-                    break
-                start = usable[idx]["time"]
-                dur = max(1.5, min(usable[idx]["duration"] * 2.5, 4.0))
-                if start + dur > video_dur:
-                    dur = video_dur - start
+            for i, beat in enumerate(selected):
+                start = beat["time"]
+                dur = min(max(beat["dur"] * 2, 1.5), 3.5)
+                if start + dur > vid_dur:
+                    dur = vid_dur - start
                 if dur < 1.0:
                     continue
 
                 clip_path = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
-                zoom = zoom_types[i % len(zoom_types)]
-                tf = text_filter if i == 0 else ""
-                if create_clip(video_path, start, dur, clip_path, zoom, tf):
+                effect = effects[i % len(effects)]
+                tf = text_f if i == 0 else ""
+
+                if make_clip(video_path, start, dur, clip_path, effect, tf):
                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
                         clip_paths.append(clip_path)
+                        logger.info(f"Clip {i}: {effect} at {start:.1f}s OK")
 
-        if not clip_paths and clips:
-            for i, clip in enumerate(clips[:6]):
-                start = clip.get("start", 0)
-                dur = min(clip.get("end", 5) - start, 4)
-                if dur < 1.5:
-                    dur = 3
+        if not clip_paths:
+            logger.info("No beat clips, making default clips")
+            positions = [0, vid_dur * 0.25, vid_dur * 0.5, vid_dur * 0.75]
+            for i, pos in enumerate(positions[:4]):
+                if pos + 2 > vid_dur:
+                    continue
                 clip_path = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
-                zoom = zoom_types[i % len(zoom_types)]
-                tf = text_filter if i == 0 else ""
-                if create_clip(video_path, start, dur, clip_path, zoom, tf):
+                effect = effects[i % len(effects)]
+                tf = text_f if i == 0 else ""
+                if make_clip(video_path, pos, 2.5, clip_path, effect, tf):
                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
                         clip_paths.append(clip_path)
 
         if not clip_paths:
-            clip_path = os.path.join(temp_dir, "default.mp4")
-            if create_clip(video_path, 0, min(6, video_dur), clip_path, "in", text_filter):
+            clip_path = os.path.join(temp_dir, "single.mp4")
+            if make_clip(video_path, 0, min(6, vid_dur), clip_path, "zoom_in", text_f):
                 if os.path.exists(clip_path):
                     clip_paths.append(clip_path)
 
-        if clip_paths and concat_and_add_music(clip_paths, music_path, output_path):
-            result["final"] = output_path
-        elif clip_paths:
-            import shutil
-            shutil.copy2(clip_paths[0], output_path)
-            result["final"] = output_path
+        logger.info(f"Total clips created: {len(clip_paths)}")
+
+        concat_path = os.path.join(temp_dir, "concat.mp4")
+        if concat_clips(clip_paths, concat_path):
+            logger.info("Concat OK, adding music")
+            if music:
+                if add_music(concat_path, music, output_path):
+                    result["final"] = output_path
+                    logger.info("Final video with music OK")
+            else:
+                import shutil
+                shutil.copy2(concat_path, output_path)
+                result["final"] = output_path
+        else:
+            logger.error("Concat failed")
+            if clip_paths:
+                import shutil
+                shutil.copy2(clip_paths[0], output_path)
+                result["final"] = output_path
 
     except Exception as e:
         logger.error(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
     return result
