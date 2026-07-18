@@ -13,7 +13,7 @@ from telegram.ext import (
 from bot.config import TELEGRAM_BOT_TOKEN, OUTPUT_DIR, TEMP_DIR, ALLOWED_USERS
 from bot.video_analyzer import analyze_video
 from bot.video_editor import edit_video, compress_for_telegram, validate_video
-from bot.storage import upload_video, delete_video, cleanup_local_files
+from bot.storage import delete_video, cleanup_local_files
 
 WAITING_VIDEO, WAITING_APPROVAL = range(2)
 
@@ -54,7 +54,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Envia un video.")
         return WAITING_VIDEO
 
-    status_msg = await update.message.reply_text("Analizando video con Gemini...")
+    status_msg = await update.message.reply_text("Descargando video...")
     video_path = None
 
     try:
@@ -66,12 +66,14 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_path = os.path.join(TEMP_DIR, f"{update.effective_user.id}{ext}")
         await file.download_to_drive(video_path)
 
+        await status_msg.edit_text("Validando video...")
+
         if not validate_video(video_path):
             await status_msg.edit_text("Video invalido o muy corto. Intenta con otro.")
             cleanup_local_files(video_path)
             return WAITING_VIDEO
 
-        await status_msg.edit_text("Gemini analizando...")
+        await status_msg.edit_text("Analizando con Gemini...")
 
         analysis = await asyncio.wait_for(
             asyncio.to_thread(analyze_video, video_path),
@@ -80,21 +82,17 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         productos = analysis.get("productos_detectados", [])
         texto1 = analysis.get("texto_principal", "POV")
-        texto2 = analysis.get("texto_secundario", "")
         estilo = analysis.get("estilo_texto", "impactante")
         caption = analysis.get("caption", "Pokemon content!")
         cta = analysis.get("call_to_action", "")
         emocion = analysis.get("emocion_objetivo", "")
 
         await status_msg.edit_text(
-            f"Gemini detecto:\n"
-            f"- Productos: {', '.join(productos[:3])}\n"
-            f"- Texto: {texto1}\n"
-            f"- Estilo: {estilo}\n"
-            f"- Editando..."
+            f"Gemini detecto: {', '.join(productos[:3])}\n"
+            f"Editando video..."
         )
 
-        clips = analysis.get("clips", [{"start": 0, "end": 8, "energy": 1.0}])
+        clips = analysis.get("clips", [{"start": 0, "end": 6, "energy": 1.0}])
 
         user_id = update.effective_user.id
         output_path = os.path.join(TEMP_DIR, f"{user_id}_final.mp4")
@@ -118,19 +116,27 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cleanup_local_files(video_path)
             return WAITING_VIDEO
 
-        await status_msg.edit_text("Subiendo a la nube...")
-        cloud_result = upload_video(edit_result["final"], folder="pokemon-content")
+        await status_msg.edit_text("Comprimiendo...")
 
-        user_sessions[user_id] = {
-            "video_path": video_path,
-            "edited_path": edit_result["final"],
-            "cloud_url": cloud_result.get("url"),
-            "cloud_public_id": cloud_result.get("public_id"),
-            "hashtags": hashtag_str,
-            "caption": caption,
-            "cta": cta,
-            "analysis": analysis,
-        }
+        compressed_path = os.path.join(TEMP_DIR, f"{user_id}_compressed.mp4")
+        send_path = compress_for_telegram(edit_result["final"], compressed_path)
+
+        await status_msg.edit_text("Enviando video...")
+
+        with open(send_path, "rb") as video_file:
+            await context.bot.send_video(
+                chat_id=update.effective_chat.id,
+                video=video_file,
+                caption=f"{caption}\n\n{hashtag_str}",
+            )
+
+        info_text = f"Analisis:\n"
+        info_text += f"- Productos: {', '.join(productos[:5])}\n"
+        info_text += f"- Texto: {texto1}\n"
+        info_text += f"- Estilo: {estilo}\n"
+        info_text += f"- Mood: {analysis.get('mood', 'N/A')}\n"
+        if cta:
+            info_text += f"- CTA: {cta}\n"
 
         keyboard = [
             [
@@ -140,42 +146,26 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await status_msg.edit_text("Video listo!")
-
-        send_path = edit_result["final"]
-        compressed_path = os.path.join(TEMP_DIR, f"{user_id}_compressed.mp4")
-        send_path = compress_for_telegram(edit_result["final"], compressed_path)
-
-        with open(send_path, "rb") as video_file:
-            await context.bot.send_video(
-                chat_id=update.effective_chat.id,
-                video=video_file,
-                caption=f"{caption}\n\n{hashtag_str}",
-            )
-
-        info_text = f"Analisis Gemini:\n"
-        info_text += f"- Productos: {', '.join(productos[:5])}\n"
-        info_text += f"- Texto: {texto1}"
-        if texto2:
-            info_text += f" / {texto2}"
-        info_text += f"\n- Estilo: {estilo}\n"
-        info_text += f"- Mood: {analysis.get('mood', 'N/A')}\n"
-        if emocion:
-            info_text += f"- Emocion: {emocion}\n"
-        if cta:
-            info_text += f"- CTA: {cta}\n"
-
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=info_text,
             reply_markup=reply_markup,
         )
 
+        user_sessions[user_id] = {
+            "video_path": video_path,
+            "edited_path": edit_result["final"],
+            "hashtags": hashtag_str,
+            "caption": caption,
+            "cta": cta,
+            "analysis": analysis,
+        }
+
         cleanup_local_files(edit_result["final"], compressed_path)
         return WAITING_APPROVAL
 
     except asyncio.TimeoutError:
-        await status_msg.edit_text("Gemini se tardo mucho. Intenta con un video mas corto.")
+        await status_msg.edit_text("Tiempo de espera agotado. Intenta con un video mas corto.")
         if video_path:
             cleanup_local_files(video_path)
         return WAITING_VIDEO
