@@ -1,7 +1,6 @@
 import os
-import json
-import tempfile
 import asyncio
+import shutil
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes,
@@ -15,6 +14,7 @@ from telegram.ext import (
 from bot.config import TELEGRAM_BOT_TOKEN, OUTPUT_DIR, TEMP_DIR, ALLOWED_USERS
 from bot.video_analyzer import analyze_audio_energy, analyze_video_content
 from bot.video_editor import edit_video
+from bot.storage import upload_video, delete_video, cleanup_local_files
 
 WAITING_VIDEO, WAITING_APPROVAL = range(2)
 
@@ -55,15 +55,13 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Por favor envia un video.")
         return WAITING_VIDEO
 
-    if video.file_size and video.file_size > 50 * 1024 * 1024:
+    if video.file_size and video.file_size > 2 * 1024 * 1024 * 1024:
         await update.message.reply_text(
-            "El video es muy grande (maximo 50MB). Comprimelo e intenta de nuevo."
+            "El video es muy grande (maximo 2GB). Comprimelo e intenta de nuevo."
         )
         return WAITING_VIDEO
 
-    status_msg = await update.message.reply_text(
-        "Recibido! Descargando video..."
-    )
+    status_msg = await update.message.reply_text("Recibido! Descargando video...")
 
     try:
         file = await context.bot.get_file(video.file_id)
@@ -75,11 +73,9 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(video_path)
 
         await status_msg.edit_text("Analizando audio y detectando momentos energeticos...")
-
         segments = analyze_audio_energy(video_path)
 
         await status_msg.edit_text("Analizando contenido del video con IA...")
-
         video_info = await asyncio.to_thread(analyze_video_content, video_path)
 
         await status_msg.edit_text(
@@ -89,7 +85,7 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         user_id = update.effective_user.id
-        output_path = os.path.join(OUTPUT_DIR, f"{user_id}_edited.mp4")
+        output_path = os.path.join(TEMP_DIR, f"{user_id}_edited.mp4")
 
         edit_result = await asyncio.to_thread(
             edit_video,
@@ -104,11 +100,16 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not edit_result.get("final") or not os.path.exists(edit_result["final"]):
             await status_msg.edit_text("Error al editar el video. Intenta con otro video.")
+            cleanup_local_files(video_path)
             return WAITING_VIDEO
+
+        cloud_result = upload_video(edit_result["final"], folder="edited-videos")
 
         user_sessions[user_id] = {
             "video_path": video_path,
             "edited_path": edit_result["final"],
+            "cloud_url": cloud_result.get("url"),
+            "cloud_public_id": cloud_result.get("public_id"),
             "hashtags": hashtag_str,
             "video_info": video_info,
             "segments": segments,
@@ -141,10 +142,13 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
         )
 
+        cleanup_local_files(edit_result["final"])
+
         return WAITING_APPROVAL
 
     except Exception as e:
         await status_msg.edit_text(f"Error procesando video: {str(e)}")
+        cleanup_local_files(video_path)
         return WAITING_VIDEO
 
 
@@ -160,27 +164,27 @@ async def handle_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if query.data == "approve":
-        await query.edit_message_text(
-            "Video aprobado! Guardado para publicar en Instagram.\n\n"
-            f"Hashtags:\n{session['hashtags']}\n\n"
-            "Copia los hashtags y sube el video manualmente a Instagram."
-        )
-
         approved_dir = os.path.join(OUTPUT_DIR, "approved")
         os.makedirs(approved_dir, exist_ok=True)
 
-        import shutil
-        final_name = f"approved_{user_id}_{len(os.listdir(approved_dir))}.mp4"
-        final_path = os.path.join(approved_dir, final_name)
-        shutil.copy2(session["edited_path"], final_path)
-
-        hashtag_file = os.path.join(approved_dir, f"{os.path.splitext(final_name)[0]}_hashtags.txt")
+        hashtag_file = os.path.join(approved_dir, f"approved_{user_id}_hashtags.txt")
         with open(hashtag_file, "w") as f:
             f.write(session["hashtags"])
 
-        if os.path.exists(session["video_path"]):
-            os.remove(session["video_path"])
+        caption = (
+            f"Video aprobado!\n\n"
+            f"Hashtags:\n{session['hashtags']}\n\n"
+        )
 
+        if session.get("cloud_url"):
+            caption += f"Link del video: {session['cloud_url']}\n\n"
+            caption += "Descarga el video desde el link y subelo a Instagram."
+        else:
+            caption += "El video se guardo localmente."
+
+        await query.edit_message_text(caption)
+
+        cleanup_local_files(session.get("video_path"), session.get("edited_path"))
         del user_sessions[user_id]
         return ConversationHandler.END
 
@@ -189,10 +193,8 @@ async def handle_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Video rechazado. Envia otro video para intentar de nuevo."
         )
 
-        if os.path.exists(session["video_path"]):
-            os.remove(session["video_path"])
-        if os.path.exists(session["edited_path"]):
-            os.remove(session["edited_path"])
+        delete_video(session.get("cloud_public_id"))
+        cleanup_local_files(session.get("video_path"), session.get("edited_path"))
 
         del user_sessions[user_id]
         return WAITING_VIDEO
@@ -202,10 +204,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in user_sessions:
         session = user_sessions.pop(user_id)
-        if os.path.exists(session.get("video_path", "")):
-            os.remove(session["video_path"])
-        if os.path.exists(session.get("edited_path", "")):
-            os.remove(session["edited_path"])
+        delete_video(session.get("cloud_public_id"))
+        cleanup_local_files(session.get("video_path"), session.get("edited_path"))
 
     await update.message.reply_text("Sesion cancelada.")
     return ConversationHandler.END
